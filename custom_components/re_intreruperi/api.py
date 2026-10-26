@@ -115,23 +115,42 @@ class ReteleElectriceClient:
             if user is None:
                 raise AuthError("câmp utilizator negăsit în formular")
 
+            form_id = form.get("id") or "loginPage:loginForm"
             payload = {
                 i["name"]: i.get("value", "")
                 for i in form.find_all("input", {"type": "hidden"})
                 if i.get("name")
             }
+            # ViewState* stau în pagină, în afara <form>; JS-ul portalului
+            # (vfPrepareForms) le mută în formular la submit.
+            for name in (*_VS, _VS_CSRF):
+                el = soup.find("input", {"name": name})
+                if el is not None and el.get("value"):
+                    payload[name] = el["value"]
+                elif name != _VS_CSRF:
+                    raise AuthError(f"lipsește {name} în pagina de login")
             payload[user["name"]] = self._email
             payload[pw["name"]] = self._password
-            submit = form.find("input", {"type": "submit"})
-            if submit is not None and submit.get("name"):
-                payload[submit["name"]] = submit.get("value", "")
+            # Butonul „Autentifică-te" e un link: JS-ul lui adaugă o pereche
+            # nume=valoare prin jsfcljs(form, 'nume,valoare', ''). O citim din pagină.
+            submit_pairs: dict[str, str] = {}
+            m_js = re.search(
+                r"jsfcljs\(\s*document\.forms\[['\"]" + re.escape(form_id)
+                + r"['\"]\]\s*,\s*['\"]([^'\"]+)['\"]",
+                page,
+            )
+            if m_js:
+                parts = m_js.group(1).split(",")
+                submit_pairs = dict(zip(parts[0::2], parts[1::2]))
+            if not submit_pairs:
+                submit_pairs = {f"{form_id}:j_id25": f"{form_id}:j_id25"}
+            payload.update(submit_pairs)
 
             action = form.get("action") or "/PEDRO_SiteLogin?startURL=%2Fs%2F"
             url = action if action.startswith("http") else f"{const.BASE_URL}{action}"
             _LOGGER.debug(
-                "Login formular: user=%s pw=%s submit=%s hidden=%d action=%s",
-                user["name"], pw["name"], submit.get("name") if submit else None,
-                sum(1 for k in payload if k not in (user["name"], pw["name"])), action,
+                "Login formular: user=%s pw=%s submit=%s câmpuri=%d action=%s",
+                user["name"], pw["name"], list(submit_pairs), len(payload), action,
             )
             async with self._s.post(
                 url,
