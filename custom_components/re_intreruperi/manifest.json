@@ -1,0 +1,12 @@
+{
+  "domain": "re_intreruperi",
+  "name": "Rețele Electrice - Întreruperi",
+  "version": "0.1.0",
+  "documentation": "https://contulmeu.reteleelectrice.ro",
+  "issue_tracker": "https://contulmeu.reteleelectrice.ro",
+  "codeowners": [],
+  "config_flow": true,
+  "iot_class": "cloud_polling",
+  "integration_type": "service",
+  "requirements": ["beautifulsoup4>=4.12.0"]
+}

@@ -1,0 +1,35 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Rețele Electrice - Întreruperi",
+        "description": "Datele contului de pe contulmeu.reteleelectrice.ro și codul POD (RO00...).",
+        "data": { "email": "Email", "password": "Parolă", "pod": "POD" }
+      },
+      "reauth_confirm": {
+        "title": "Reautentificare",
+        "data": { "password": "Parolă" }
+      }
+    },
+    "error": {
+      "invalid_auth": "Autentificare eșuată",
+      "cannot_connect": "Portalul nu răspunde sau POD-ul nu e valid",
+      "unknown": "Eroare neașteptată"
+    },
+    "abort": {
+      "already_configured": "Acest POD este deja configurat",
+      "reauth_successful": "Reautentificare reușită"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": { "scan_interval": "Interval actualizare (secunde, minim 900)" }
+      }
+    }
+  },
+  "entity": {
+    "sensor": { "outage_status": { "name": "Întreruperi curent" } },
+    "binary_sensor": { "outage_active": { "name": "Întrerupere activă" } }
+  }
+}
