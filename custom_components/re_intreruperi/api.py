@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import html
 import json
+import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -18,6 +19,8 @@ from bs4 import BeautifulSoup
 
 from . import const
 
+_LOGGER = logging.getLogger(__name__)
+
 TIMEOUT = aiohttp.ClientTimeout(total=60)
 _NO_OUTAGE_RE = re.compile(r"nicio\s+întrerupere|nu avem înregistrat", re.I)
 _VS = (
@@ -26,6 +29,11 @@ _VS = (
     "com.salesforce.visualforce.ViewStateMAC",
 )
 _VS_CSRF = "com.salesforce.visualforce.ViewStateCSRF"
+
+
+def _title(text: str) -> str:
+    m = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
+    return (m.group(1).strip()[:80] if m else "")
 
 
 class AuthError(Exception):
@@ -85,11 +93,17 @@ class ReteleElectriceClient:
                 const.LOGIN_PAGE, params={"startURL": "/s/"}, timeout=TIMEOUT
             ) as r:
                 page = await r.text()
+                _LOGGER.debug(
+                    "Login GET %s -> HTTP %s, %d bytes, titlu=%r",
+                    r.url, r.status, len(page), _title(page),
+                )
             soup = await self._soup(page)
             form = soup.find("form")
             pw = form.find("input", {"type": "password"}) if form else None
             if form is None or pw is None:
-                raise AuthError("formular de login negăsit (flux schimbat?)")
+                raise AuthError(
+                    f"formular de login negăsit (HTTP {r.status}, titlu={_title(page)!r})"
+                )
             user = next(
                 (
                     i
@@ -99,7 +113,7 @@ class ReteleElectriceClient:
                 None,
             )
             if user is None:
-                raise AuthError("câmp utilizator negăsit")
+                raise AuthError("câmp utilizator negăsit în formular")
 
             payload = {
                 i["name"]: i.get("value", "")
@@ -114,6 +128,11 @@ class ReteleElectriceClient:
 
             action = form.get("action") or "/PEDRO_SiteLogin?startURL=%2Fs%2F"
             url = action if action.startswith("http") else f"{const.BASE_URL}{action}"
+            _LOGGER.debug(
+                "Login formular: user=%s pw=%s submit=%s hidden=%d action=%s",
+                user["name"], pw["name"], submit.get("name") if submit else None,
+                sum(1 for k in payload if k not in (user["name"], pw["name"])), action,
+            )
             async with self._s.post(
                 url,
                 data=payload,
@@ -122,13 +141,27 @@ class ReteleElectriceClient:
                 timeout=TIMEOUT,
             ) as r:
                 body = await r.text()
+                status = r.status
+                location = r.headers.get("Location")
+            _LOGGER.debug(
+                "Login POST -> HTTP %s, Location=%s, %d bytes, titlu=%r",
+                status, location, len(body), _title(body),
+            )
 
             m = re.search(r"https?://[^'\"\s]*frontdoor\.jsp[^'\"\s]*", body)
-            if m is None:
-                raise AuthError("login eșuat (credențiale greșite sau flux schimbat)")
-            async with self._s.get(html.unescape(m.group(0)), timeout=TIMEOUT) as r:
+            target = html.unescape(m.group(0)) if m else None
+            if target is None and location and "login" not in location.lower():
+                # unele răspunsuri folosesc redirect HTTP în loc de redirect JS
+                target = location if location.startswith("http") else f"{const.BASE_URL}{location}"
+            if target is None:
+                raise AuthError(
+                    "login eșuat (parolă greșită sau flux schimbat): "
+                    f"HTTP {status}, titlu={_title(body)!r}, Location={location!r}"
+                )
+            async with self._s.get(target, timeout=TIMEOUT) as r:
+                _LOGGER.debug("Login redirect GET -> HTTP %s, url final %s", r.status, r.url)
                 if r.status != 200:
-                    raise AuthError(f"frontdoor HTTP {r.status}")
+                    raise AuthError(f"redirect post-login HTTP {r.status}")
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             raise CannotConnect(str(err)) from err
 
@@ -136,15 +169,17 @@ class ReteleElectriceClient:
         try:
             async with self._s.get(const.VF_OUTAGES, timeout=TIMEOUT) as r:
                 page = await r.text()
+                vf_info = f"HTTP {r.status}, url={r.url}, titlu={_title(page)!r}"
+                _LOGGER.debug("VF GET %s, %d bytes", vf_info, len(page))
                 if r.status in (401, 403):
-                    raise AuthError(f"HTTP {r.status} pe pagina VF")
+                    raise AuthError(f"pagina VF refuzată: {vf_info}")
             soup = await self._soup(page)
 
             fields: dict[str, str] = {}
             for name in _VS:
                 el = soup.find("input", {"name": name}) or soup.find("input", {"id": name})
                 if el is None or not el.get("value"):
-                    raise AuthError(f"lipsește {name} (sesiune expirată?)")
+                    raise AuthError(f"lipsește {name} (sesiune expirată?) — {vf_info}")
                 fields[name] = el["value"]
             csrf = soup.find("input", {"name": _VS_CSRF}) or soup.find("input", {"id": _VS_CSRF})
             if csrf is not None and csrf.get("value"):
@@ -171,6 +206,7 @@ class ReteleElectriceClient:
                 timeout=TIMEOUT,
             ) as r:
                 body = await r.text()
+                _LOGGER.debug("VF POST -> HTTP %s, %d bytes", r.status, len(body))
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             raise CannotConnect(str(err)) from err
         return parse_outage_response(pod, body)

@@ -10,7 +10,6 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .api import AuthError, CannotConnect, ReteleElectriceClient
 from .const import (
@@ -29,9 +28,8 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def _validate(hass: HomeAssistant, email: str, password: str, pod: str) -> None:
-    session = async_create_clientsession(
-        hass,
-        auto_cleanup=False,
+    # sesiune proprie, închisă la final (nu închidem sesiunea partajată a lui HA)
+    session = aiohttp.ClientSession(
         cookie_jar=aiohttp.CookieJar(unsafe=True),
         headers={"User-Agent": USER_AGENT},
     )
@@ -60,9 +58,11 @@ class ReteleConfigFlow(ConfigFlow, domain=DOMAIN):
                 await _validate(
                     self.hass, user_input[CONF_EMAIL], user_input[CONF_PASSWORD], pod
                 )
-            except AuthError:
+            except AuthError as err:
+                _LOGGER.warning("Validare eșuată (autentificare): %s", err)
                 errors["base"] = "invalid_auth"
-            except CannotConnect:
+            except CannotConnect as err:
+                _LOGGER.warning("Validare eșuată (conexiune): %s", err)
                 errors["base"] = "cannot_connect"
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Eroare neașteptată la validare")
@@ -104,9 +104,11 @@ class ReteleConfigFlow(ConfigFlow, domain=DOMAIN):
                     user_input[CONF_PASSWORD],
                     entry.data[CONF_POD],
                 )
-            except AuthError:
+            except AuthError as err:
+                _LOGGER.warning("Reautentificare eșuată: %s", err)
                 errors["base"] = "invalid_auth"
-            except CannotConnect:
+            except CannotConnect as err:
+                _LOGGER.warning("Reautentificare eșuată (conexiune): %s", err)
                 errors["base"] = "cannot_connect"
             else:
                 return self.async_update_reload_and_abort(
